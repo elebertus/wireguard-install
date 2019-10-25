@@ -43,6 +43,36 @@ if [ "$( systemd-detect-virt )" == "openvz" ]; then
 fi
 
 if [ ! -f "$WG_CONFIG" ]; then
+    if [[ -z "$PRIVATE_SUBNET" ]]; then
+        echo "Do you want to use a specific subnet?"
+        echo "No need to change this, default is fine unless you know why you need a different subnet."
+        echo "    custom) Custom provided subnet"
+        echo "    default) Custom provided subnet"
+        read -p "Default or custom subnet: " -e -i "default" SUBNET_CHOICE
+
+        case $SUBNET_CHOICE in
+            "custom")
+                read -p "enter a valid ipv4 subnet cidr: " -e -i "xx.xx.xx.xx/24" CUSTOM_CIDR
+            python3 - << EOF
+import ipaddress
+try:
+    ipaddress.ip_network("$CUSTOM_CIDR")
+except Exception:
+    exit(1)
+exit(0)
+EOF
+            if [[ $? -gt 0 ]]; then
+                echo "$CUSTOM_CIDR is not a valid ipv4 subnet cidr"
+                exit 1
+            fi
+            PRIVATE_SUBNET=$CUSTOM_CIDR
+            ;;
+            "default")
+            PRIVATE_SUBNET="10.9.0.0/24"
+            ;;
+        esac
+    fi
+
     ### Install server and add default client
     INTERACTIVE=${INTERACTIVE:-yes}
     PRIVATE_SUBNET=${PRIVATE_SUBNET:-"10.9.0.0/24"}
@@ -89,16 +119,52 @@ if [ ! -f "$WG_CONFIG" ]; then
     fi
 
     if [ "$DISTRO" == "Ubuntu" ]; then
-	apt-get install software-properties-common -y
-	add-apt-repository ppa:wireguard/wireguard -y
-	apt update
-	apt install linux-headers-$(uname -r) wireguard qrencode iptables-persistent -y
+        echo "Checking if packages need to be installed"
+        packages="software-properties-common linux-headers-$(uname -r) wireguard qrencode iptables-persistent"
+        packages_to_install=""
+        for pkg in $packages; do
+            if [[ $(dpkg --list | grep -qE "$i$"; echo $?) -eq 1 ]]; then
+                packages_to_install="$packages_to_install $pkg"
+            fi
+        done
+        if [[ ! -z $packages_to_install]]; then
+            echo "deb http://deb.debian.org/debian/ unstable main" > /etc/apt/sources.list.d/unstable.list
+            printf 'Package: *\nPin: release a=unstable\nPin-Priority: 90\n' > /etc/apt/preferences.d/limit-unstable
+          for to_install in $packages_to_install; do
+            if [[ "$to_install" == "software-properties-common" ]]; then
+            elif [[ $(echo $to_install | grep -qE "wireguard") ]]; then
+            fi
+
+
+          done
+		    apt install $packages_to_install -y
+        fi
+	# apt-get install software-properties-common -y
+	# add-apt-repository ppa:wireguard/wireguard -y
+	# apt update
+	# apt install linux-headers-$(uname -r) wireguard qrencode iptables-persistent -y
     elif [ "$DISTRO" == "Debian" ]; then
-        echo "deb http://deb.debian.org/debian/ unstable main" > /etc/apt/sources.list.d/unstable.list
-        printf 'Package: *\nPin: release a=unstable\nPin-Priority: 90\n' > /etc/apt/preferences.d/limit-unstable
-		apt-get install software-properties-common -y
-		apt update
-		apt install linux-headers-$(uname -r) wireguard qrencode iptables-persistent -y
+        echo "Checking if packages need to be installed"
+        packages="software-properties-common linux-headers-$(uname -r) wireguard qrencode iptables-persistent"
+        packages_to_install=""
+        for pkg in $packages; do
+            if [[ $(dpkg --list | grep -qE "$i$"; echo $?) -eq 1 ]]; then
+                packages_to_install="$packages_to_install $pkg"
+            fi
+        done
+        if [[ ! -z $packages_to_install]]; then
+            echo "deb http://deb.debian.org/debian/ unstable main" > /etc/apt/sources.list.d/unstable.list
+            printf 'Package: *\nPin: release a=unstable\nPin-Priority: 90\n' > /etc/apt/preferences.d/limit-unstable
+          for to_install in $packages_to_install; do
+              if [[ "$to_install" == "software-properties-common" ]]; then
+                  apt-get install $to_install -y
+                  apt update
+                  packages_to_install=$(echo $packages_to_install | sed -e 's/software-properties-common //')
+                  break
+              fi
+          done
+		    apt install $packages_to_install -y
+        fi
     elif [ "$DISTRO" == "CentOS" ]; then
         curl -Lo /etc/yum.repos.d/wireguard.repo https://copr.fedorainfracloud.org/coprs/jdoss/wireguard/repo/epel-7/jdoss-wireguard-epel-7.repo
         yum install epel-release -y
@@ -192,7 +258,7 @@ Address = $CLIENT_ADDRESS/$PRIVATE_SUBNET_MASK
 DNS = $CLIENT_DNS
 [Peer]
 PublicKey = $SERVER_PUBKEY
-AllowedIPs = 0.0.0.0/0, ::/0 
+AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = $SERVER_ENDPOINT
 PersistentKeepalive = 25" > $HOME/$CLIENT_NAME-wg0.conf
 qrencode -t ansiutf8 -l L < $HOME/$CLIENT_NAME-wg0.conf
